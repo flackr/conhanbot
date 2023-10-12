@@ -20,12 +20,12 @@ type ChatMessage = {
 
 // Type sent with user and userList messages.
 type User = {
-  userID: number;
-  name: string;
-  status: number;
-  tableID: number;
-  hyphenated: boolean;
-  inactive: boolean;
+	userID: number;
+	name: string;
+	status: number;
+	tableID: number;
+	hyphenated: boolean;
+	inactive: boolean;
 };
 
 type Table = {
@@ -65,87 +65,92 @@ type Table = {
 };
 
 type DrawAction = {
-  type: "draw";
-  playerIndex: number;
-  order: number;
-  // Will be -1 if unknown.
-  suitIndex: number;
-  // Will be -1 if unknown.
-  rank: number;
+	type: "draw";
+	playerIndex: number;
+	order: number;
+	// Will be -1 if unknown.
+	suitIndex: number;
+	// Will be -1 if unknown.
+	rank: number;
 };
 
 type ClueAction = {
-  type: "clue";
-  clue: {
-    type: number;
-    value: number;
-  },
-  giver: number;
-  // Absolute card indices touched.
-  list: number[];
-  target: number;
-  turn: number;
+	type: "clue";
+	clue: {
+		type: number;
+		value: number;
+	};
+	giver: number;
+	// Absolute card indices touched.
+	list: number[];
+	target: number;
+	turn: number;
 };
 
 type StatusAction = {
-  type: "status";
-  clues: number;
-  maxScore: number;
-  score: number;
+	type: "status";
+	clues: number;
+	maxScore: number;
+	score: number;
 };
 
 type TurnAction = {
-  type: "turn";
-  // Absolute turn number - first turn is 0.
-  num: number;
-  currentPlayerIndex: number;
+	type: "turn";
+	// Absolute turn number - first turn is 0.
+	num: number;
+	currentPlayerIndex: number;
 };
 
 type PlayAction = {
-  type: "play";
-  playerIndex: number;
-  // Absolute card index
-  order: number;
-  suitIndex: number;
-  rank: number;
-}
+	type: "play";
+	playerIndex: number;
+	// Absolute card index
+	order: number;
+	suitIndex: number;
+	rank: number;
+};
 
-type ActionType = DrawAction | ClueAction | StatusAction | PlayAction | TurnAction;
+type ActionType =
+	| DrawAction
+	| ClueAction
+	| StatusAction
+	| PlayAction
+	| TurnAction;
 
 type GameAction = {
-  action: ActionType;
-  tableID: number;
+	action: ActionType;
+	tableID: number;
 };
 
 type GameActionList = {
-  list: ActionType[];
-  tableID: number;
+	list: ActionType[];
+	tableID: number;
 };
 
 type NoteListPlayer = {
-  // One for every card in game.
-  notes: string[];
-  tableID: number;
-}
+	// One for every card in game.
+	notes: string[];
+	tableID: number;
+};
 
 type NoteOrder = {
-  tableID: number;
-  // Card index.
-  order: number;
-  note: string;
-}
+	tableID: number;
+	// Card index.
+	order: number;
+	note: string;
+};
 
 export class HanabiClient {
 	options: ClientOptions;
 	ws?: WebSocket;
 	username?: string;
 	tables: { [key: number]: Table };
-  users: { [key: number]: User };
+	users: { [key: number]: User };
 
 	constructor(options: ClientOptions) {
 		this.options = options;
 		this.tables = {};
-    this.users = {};
+		this.users = {};
 	}
 
 	async login() {
@@ -226,24 +231,24 @@ export class HanabiClient {
 					tableID: data.tableID,
 				});
 				break;
-      case "gameAction":
-        // TODO: Process the action,
-        // and take action if its our turn.
-        break;
-      case "gameActionList":
-        // TODO: Process all of the actions,
-        // and take action if its our turn.
-        this.send("loaded", {
-          tableID: data.tableID
-        });
-        break;
-      case "databaseID":
-        // Sent when the game is over and shared replay starts.
-        // Leave table and clean up game data.
-        this.send("tableUnattend", {
-          tableID: data.tableID
-        });
-        break;
+			case "gameAction":
+				// TODO: Process the action,
+				// and take action if its our turn.
+				break;
+			case "gameActionList":
+				// TODO: Process all of the actions,
+				// and take action if its our turn.
+				this.send("loaded", {
+					tableID: data.tableID,
+				});
+				break;
+			case "databaseID":
+				// Sent when the game is over and shared replay starts.
+				// Leave table and clean up game data.
+				this.send("tableUnattend", {
+					tableID: data.tableID,
+				});
+				break;
 		}
 	};
 

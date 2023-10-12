@@ -12,10 +12,9 @@ export function quit(reason: string) {
 	quitFunction();
 }
 
-const url = process.env.HANAB_URL || 'https://hanab.live/';
+const url = process.env.HANAB_URL || "https://hanab.live/";
 const bots = process.env.HANAB_BOTS || "1";
-if (!process.env.HANAB_USERNAME ||
-	  !process.env.HANAB_PASSWORD) {
+if (!process.env.HANAB_USERNAME || !process.env.HANAB_PASSWORD) {
 	console.error(`Please set the following environment variables:
 	HANAB_USERNAME		The base username to log into ${url} with. A number will be added for each bot.
 	HANAB_PASSWORD		The password for these accounts.`);
@@ -31,7 +30,7 @@ let baseOptions = {
 let num = parseInt(bots);
 
 for (let i = 1; i <= num; ++i) {
-	let options = {...baseOptions, username: `${baseName}i`};
+	let options = { ...baseOptions, username: `${baseName}i` };
 	let client = new HanabiClient(options);
 	await client.login();
 }
