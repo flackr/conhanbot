@@ -3,9 +3,11 @@ import { AI, PlayerActionType } from "../src/ai";
 export function setState(state: {
 	ai?: AI;
 	piles?: string[];
+	discard?: string[];
 	hands: string[][];
 }): AI {
 	const piles = state.piles || [];
+	const discard = state.discard || [];
 	const hands = state.hands;
 	let ai = state.ai || new AI({ players: hands.length });
 	for (let i = 0; i < piles.length; ++i) {
@@ -16,12 +18,24 @@ export function setState(state: {
 			const order = ai.state.deck.pop();
 			if (order === undefined) {
 				throw "Ran out of cards.";
-				return;
+				return ai;
 			}
 			ai.state.cards[order].rank = j;
 			ai.state.cards[order].suitIndex = suit;
 			ai.state.piles[suit].push(order);
 		}
+	}
+	for (let i = 0; i < discard.length; ++i) {
+		let suit = ai.state.suits.indexOf(discard[i][0]);
+		let rank = parseInt(discard[i][1]);
+		const order = ai.state.deck[ai.state.deck.length - 1];
+		if (order === undefined) {
+			throw "Ran out of cards.";
+			return ai;
+		}
+		ai.state.cards[order].rank = rank;
+		ai.state.cards[order].suitIndex = suit;
+		ai.discardDeckCard(order);
 	}
 	for (let i = 0; i < hands.length; ++i) {
 		for (let j = hands[i].length - 1; j >= 0; --j) {

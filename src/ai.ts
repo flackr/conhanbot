@@ -204,13 +204,23 @@ class DiscardIndexAction extends MoveCardAction {
 		this.ai.state.discard.push(this.order);
 		this.ai.state.clues++;
 
-		// TODO: A discard when the player has a known play should be treated differently.
+		const card = this.ai.assumedCard(this.order);
+		if (card.rank >= 0 && card.suitIndex >= 0) {
+			this.ai.state.remain[card.suitIndex][card.rank]--;
+		}
+
+		// TODO: A discard when the player has a known play should modify clue state.
 	}
 
 	undo(index: number) {
 		super.undo(index);
 		this.ai.state.discard.pop();
 		this.ai.state.clues--;
+
+		const card = this.ai.assumedCard(this.order);
+		if (card.rank >= 0 && card.suitIndex >= 0) {
+			this.ai.state.remain[card.suitIndex][card.rank]++;
+		}
 	}
 
 	command(): PlayerPlayOrDiscardAction {
@@ -331,7 +341,6 @@ class ClueAction extends ReversibleAction {
 				// TODO: Check for possible cards needing protecting. Assume it is one of the matching cards.
 				// If not, just assume a play clue.
 				protect = true;
-				play = false;
 				// However, if someone later plays a card blindly that could lead to this card,
 				// we should assume it may have been a play clue. As such, we should assume it
 				// could also be one of the playable cards that could follow an implied play.
@@ -355,6 +364,24 @@ class ClueAction extends ReversibleAction {
 				}
 				this.ai.state.ai.inferred[hand[focus]].possible =
 					this.ai.state.ai.inferred[hand[focus]].possible.filter((card) => {
+						if (protect) {
+							if (card.rank == 5) {
+								// 5's can only be saved by value clues.
+								if (this.clueRank == 5) {
+									return true;
+								}
+							} else {
+								const value = this.ai.cardValue(hand[focus], card);
+								if (value == CardValue.TwoSave) {
+									// 2 saves can only be done by value.
+									if (this.clueRank == 2) {
+										return true;
+									}
+								} else if (value > CardValue.Important) {
+									return true;
+								}
+							}
+						}
 						let pile = this.ai.state.piles[card.suitIndex];
 						let minRank = pile.length + 1;
 
@@ -493,6 +520,15 @@ export class AI {
 			break;
 		}
 		return chop;
+	}
+
+	discardDeckCard(order: number) {
+		const index = this.state.deck.indexOf(order);
+		if (index == -1) {
+			throw `Requested card #${order} not in deck.`;
+			return;
+		}
+		new DiscardIndexAction(this, this.state.deck, index).play(0);
 	}
 
 	drawCard(player: number, order: number, suit: number, rank: number) {

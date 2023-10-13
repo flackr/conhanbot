@@ -214,5 +214,68 @@ describe("hgroup level 1", () => {
 			// Bob does not know whether or not this is a Play Clue or a Save Clue, but he has to treat it as a Save Clue for the time being until he gets more information.
 			expect(cards(ai, "Bob", 5)).toEqual(["R2", "Y2", "B2", "P2"].sort());
 		});
+
+		// https://hanabi.github.io/docs/beginner/2-save-question-3
+		it("The 2 Save (Question 3)", () => {
+			let ai = setState({
+				piles: ["B2", "P1"],
+				hands: [
+					["??", "??", "??", "?5*", "?5*"],
+					["R4", "P3", "Y2", "R2", "G2"],
+					["Y5", "G2", "G1", "G1", "Y2"],
+				],
+			});
+
+			// Not allowed to save either 2 because the matching 2 is visible.
+			expect(action(ai, "Alice")).toEqual("Discard #3");
+		});
+
+		// https://hanabi.github.io/docs/beginner/critical-save
+		it("The Critical Save", () => {
+			let ai = setState({
+				piles: ["R1", "Y1", "B1"],
+				hands: [
+					["??", "??", "??", "??", "??"],
+					["??", "??", "??", "??", "?5*"],
+				],
+				discard: ["B4"],
+			});
+			clue(ai, "Alice", "Bob", "B", [4]);
+			expect(cards(ai, "Bob", 4)).toEqual(["B2", "B4"].sort());
+			expect(action(ai, "Bob")).toEqual("Discard #3");
+		});
+
+		// https://hanabi.github.io/docs/beginner/critical-save-question-1
+		it("The Critical Save (Question 1)", () => {
+			let ai = setState({
+				piles: ["R1", "Y2", "P3"],
+				discard: ["G3"],
+				hands: [
+					["??", "??", "??", "??", "??"],
+					["??", "??", "??", "?4*", "?4*"],
+					["P4", "R2*", "Y1", "Y2", "Y4"],
+				],
+			});
+			// Alice clues number 3 to Bob, touching a card on slot 3.
+			clue(ai, "Alice", "Bob", 3, [3]);
+			expect(cards(ai, "Bob", 3)).toEqual(["Y3", "R3", "G3"].sort());
+		});
+
+		// https://hanabi.github.io/docs/beginner/critical-save-question-2
+		it("The Critical Save (Question 2)", () => {
+			let ai = setState({
+				piles: ["R4", "G1", "B2"],
+				discard: ["P3", "P4"],
+				hands: [
+					["??", "??", "??", "??", "??"],
+					["??", "??", "??", "??", "??"],
+					["R1", "R1", "P4", "P3", "P5"],
+				],
+			});
+			expect(action(ai, "Alice")).toEqual("Clue Cathy 5");
+			clue(ai, "Alice", "Cathy", 5, [5]);
+			// TODO: Need to determine that purple is a better save clue than the rank clue.
+			expect(action(ai, "Bob")).toEqual("Clue Cathy P");
+		});
 	});
 });
