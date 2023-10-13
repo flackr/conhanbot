@@ -20,6 +20,7 @@ enum CardValue {
 	Critical_3 = 11, // A critical 3.
 	Critical_2 = 12, // A critical 2.
 	Critical_1 = 13, // A critical 1.
+	MaxValue = 13,
 }
 
 type ExtraCardInfo = {
@@ -47,6 +48,8 @@ type GameState = {
 	suits: string[];
 	// The number of remaining cards for each suit/rank.
 	remain: number[][];
+	// The number of clued cards of each suit/rank.
+	clued: number[][];
 	piles: Pile[];
 	ai: AIInfo;
 	clues: number;
@@ -268,37 +271,15 @@ class ClueAction extends ReversibleAction {
 	}
 
 	play(index: number) {
-		let clued: number[][] = this.ai.state.suits.map((x) => []);
-		for (let i = 0; i < this.ai.state.hands.length; ++i) {
-			const hand = this.ai.state.hands[i];
-			for (let j = 0; j < hand.length; ++j) {
-				const order = hand[j];
-				let card = this.ai.state.cards[order];
-				const extra = this.ai.state.ai.inferred[order];
-				if (i == this.from || i == this.player) {
-					if (extra.possible.length == 1) {
-						card = extra.possible[0];
-					} else {
-						// Don't use information from unknown cards.
-						continue;
-					}
-				}
-				// Ignore cards we don't know everything about.
-				if (card.rank == -1 || card.suitIndex == -1) continue;
-				if (extra.clued) {
-					clued[card.suitIndex][card.rank] =
-						(clued[card.suitIndex][card.rank] || 0) + 1;
-				}
-			}
-		}
 		const hand = this.ai.state.hands[this.player];
 		// Update knowledge about cards.
 		let newlyClued = [];
 		let touched = [];
 		let chop = this.ai.chop(this.player);
+		this.ai.modifyCluedFor(this.from, -1);
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
-			const card = this.ai.state.cards[order];
+			let card = this.ai.state.cards[order];
 			const inferred = this.ai.state.ai.inferred[order];
 			let wasTouched = false;
 			let prevKnown = this.prevInfo[i].clued;
@@ -308,7 +289,9 @@ class ClueAction extends ReversibleAction {
 					card.rank == this.clueRank
 						? (info: CardInfo) =>
 								info.rank == this.clueRank &&
-								(prevKnown || !clued[info.suitIndex][info.rank])
+								(prevKnown ||
+									this.ai.cardValue(order, info, CardValue.Eventual) >=
+										CardValue.Eventual)
 						: (info: CardInfo) => info.rank != this.clueRank;
 				this.ai.state.ai.inferred[order].possible =
 					this.ai.state.ai.inferred[order].possible.filter(filterFn);
@@ -318,7 +301,9 @@ class ClueAction extends ReversibleAction {
 					card.suitIndex == this.clueSuit
 						? (info: CardInfo) =>
 								info.suitIndex == this.clueSuit &&
-								(prevKnown || !clued[info.suitIndex][info.rank])
+								(prevKnown ||
+									this.ai.cardValue(order, info, CardValue.Eventual) >=
+										CardValue.Eventual)
 						: (info: CardInfo) => info.suitIndex != this.clueSuit;
 				this.ai.state.ai.inferred[order].possible =
 					this.ai.state.ai.inferred[order].possible.filter(filterFn);
@@ -326,7 +311,13 @@ class ClueAction extends ReversibleAction {
 			inferred.clued = inferred.clued || wasTouched;
 			if (wasTouched) {
 				touched.push(i);
-				if (!this.prevInfo[i].clued) newlyClued.push(i);
+				if (!this.prevInfo[i].clued) {
+					card = this.ai.assumedCard(order);
+					if (card.suitIndex >= 0 && card.rank >= 0) {
+						this.ai.state.clued[card.suitIndex][card.rank]++;
+					}
+					newlyClued.push(i);
+				}
 			}
 		}
 		// Infer convention plays / protects. Both conventions have the concept of
@@ -337,9 +328,10 @@ class ClueAction extends ReversibleAction {
 		if (this.ai.convention == "hgroup") {
 			if (newlyClued.indexOf(chop) != -1) {
 				focus = chop;
-				// Check for possible cards needing protecting. Assume it is one of the matching cards.
+				// TODO: Check for possible cards needing protecting. Assume it is one of the matching cards.
 				// If not, just assume a play clue.
-				// protect = true;
+				protect = true;
+				play = false;
 				// However, if someone later plays a card blindly that could lead to this card,
 				// we should assume it may have been a play clue. As such, we should assume it
 				// could also be one of the playable cards that could follow an implied play.
@@ -349,35 +341,46 @@ class ClueAction extends ReversibleAction {
 				focus = touched[0];
 			}
 		}
-		if (focus == -1) return;
-
-		if (play) {
-			// TODO: Detect finesses.
-			// For each suit, determine the maximum rank that could be reached through clued card plays
-			let maxRank: number[] = [];
-			for (let suit = 0; suit < this.ai.state.suits.length; ++suit) {
-				let rank = this.ai.state.piles[suit].length + 1;
-				while (clued[suit][rank]) {
-					++rank;
+		if (focus != -1) {
+			if (play) {
+				// TODO: Detect finesses.
+				// For each suit, determine the maximum rank that could be reached through clued card plays
+				let maxRank: number[] = [];
+				for (let suit = 0; suit < this.ai.state.suits.length; ++suit) {
+					let rank = this.ai.state.piles[suit].length + 1;
+					while (this.ai.state.clued[suit][rank]) {
+						++rank;
+					}
+					maxRank.push(rank);
 				}
-				maxRank.push(rank);
+				this.ai.state.ai.inferred[hand[focus]].possible =
+					this.ai.state.ai.inferred[hand[focus]].possible.filter((card) => {
+						let pile = this.ai.state.piles[card.suitIndex];
+						let minRank = pile.length + 1;
+
+						if (card.rank >= minRank && card.rank <= maxRank[card.suitIndex])
+							return true;
+						return false;
+					});
 			}
-			this.ai.state.ai.inferred[hand[focus]].possible =
-				this.ai.state.ai.inferred[hand[focus]].possible.filter((card) => {
-					let pile = this.ai.state.piles[card.suitIndex];
-					let minRank = pile.length + 1;
-					if (card.rank >= minRank && card.rank <= maxRank[card.suitIndex])
-						return true;
-					return false;
-				});
 		}
+		this.ai.modifyCluedFor(this.from, 1);
 	}
 
 	undo(index: number) {
 		// Restore previous knowledge about cards.
+		const hand = this.ai.state.hands[this.player];
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
-			const card = this.ai.state.cards[order];
+			const card = this.ai.assumedCard(order);
+			if (
+				!this.prevInfo[i].clued &&
+				this.ai.state.ai.inferred[order].clued &&
+				card.rank >= 0 &&
+				card.suitIndex >= 0
+			) {
+				this.ai.state.clued[card.suitIndex][card.rank]--;
+			}
 			this.ai.state.ai.inferred[order] = this.prevInfo[i];
 		}
 	}
@@ -433,6 +436,7 @@ export class AI {
 			faults: 0,
 			turn: 0,
 			remain: [],
+			clued: [],
 			ai: {
 				inferred: [],
 			},
@@ -448,9 +452,11 @@ export class AI {
 		for (let suit = 0; suit < this.state.suits.length; ++suit) {
 			const numOfRank = [0, 3, 2, 2, 2, 1];
 			this.state.remain.push([]);
+			this.state.clued.push([]);
 			this.state.piles.push([]);
 			for (let rank = 1; rank <= 5; ++rank) {
 				this.state.remain[suit][rank] = numOfRank[rank];
+				this.state.clued[suit][rank] = 0;
 				cards += this.state.remain[suit][rank];
 				allPossible.push({ rank, suitIndex: suit });
 			}
@@ -519,12 +525,26 @@ export class AI {
 		new ClueAction(this, from, player, clueSuit, clueRank).play(0);
 	}
 
+	assumedCard(order: number): CardInfo {
+		const card = this.state.cards[order];
+		if (card.rank >= 0 && card.suitIndex >= 0) {
+			return card;
+		}
+		const possible = this.state.ai.inferred[order].possible;
+		if (possible.length == 1) {
+			return possible[0];
+		}
+		return { suitIndex: -1, rank: -1 };
+	}
+
 	/**
 	 * Returns the value of the given card:
 	 */
-	cardValue(player: number, index: number): CardValue {
-		const order = this.state.hands[player][index];
-		const card = this.state.cards[order];
+	cardValue(
+		order: number,
+		card: CardInfo,
+		minValue: CardValue = CardValue.MaxValue,
+	): CardValue {
 		// We can't save cards we don't know about.
 		if (card.rank == -1 || card.suitIndex == -1) {
 			return CardValue.Unknown;
@@ -548,30 +568,40 @@ export class AI {
 			return CardValue.Critical_5 + (5 - card.rank);
 		}
 
-		// Check if any other instances of this card are visible.
-		let otherCard = -1;
-		for (let i = 0; i < this.state.hands.length; ++i) {
-			if (i == player) {
-				continue;
-			}
-			if (
-				this.state.hands[i].find((order) => {
-					const other = this.state.cards[order];
-					return other.rank == card.rank && other.suitIndex == card.suitIndex;
-				})
-			) {
-				// TODO: Find clued other card if it exists.
-				otherCard = order;
-				break;
-			}
-		}
-
 		// Check for a duplicate of an already clued card.
-		if (otherCard >= 0 && this.state.ai.inferred[otherCard].clued) {
+		if (
+			!this.state.ai.inferred[order].clued &&
+			this.state.clued[card.suitIndex][card.rank]
+		) {
 			return CardValue.Duplicate;
 		}
-		if (card.rank == 2 && otherCard == -1) {
-			return CardValue.TwoSave;
+
+		// At this point, we're guaranteed this should eventually be a useful card.
+		// If we only card to know that, we can skip some of the more expensive checks.
+		if (minValue <= CardValue.Eventual) {
+			return CardValue.Eventual;
+		}
+		if (card.rank == 2) {
+			// Check if any other instances of this card are visible.
+			let otherCard = -1;
+			for (let i = 0; i < this.state.hands.length; ++i) {
+				let oorder = this.state.hands[i].find((oorder) => {
+					const other = this.state.cards[oorder];
+					return (
+						oorder != order &&
+						other.rank == card.rank &&
+						other.suitIndex == card.suitIndex
+					);
+				});
+				if (oorder !== undefined) {
+					// TODO: Find clued other card if it exists.
+					otherCard = oorder;
+					break;
+				}
+			}
+			if (otherCard == -1) {
+				return CardValue.TwoSave;
+			}
 		}
 
 		if (
@@ -589,15 +619,34 @@ export class AI {
 		return CardValue.Eventual;
 	}
 
+	modifyCluedFor(player: number, direction: number) {
+		const giver = this.state.hands[player];
+		// Remove known clued cards that the cluegiver wouldn't know for sure.
+		for (let i = 0; i < giver.length; ++i) {
+			const order = giver[i];
+			const card = this.state.cards[order];
+			const inferred = this.state.ai.inferred[order];
+			if (
+				inferred.clued &&
+				card.rank >= 0 &&
+				card.suitIndex >= 0 &&
+				inferred.possible.length != 1
+			) {
+				this.state.clued[card.suitIndex][card.rank] += direction;
+			}
+		}
+	}
+
 	action(player: number): ReversibleAction {
 		// Check for protects.
 		const hand = this.state.hands[player];
 		for (let offset = 1; offset < this.state.hands.length; ++offset) {
 			let index = (player + offset) % this.state.hands.length;
 			const chop = this.chop(index);
-			const card = this.state.cards[this.state.hands[index][chop]];
+			const order = this.state.hands[index][chop];
+			const card = this.state.cards[order];
 			if (chop == -1) continue;
-			const cValue = this.cardValue(index, chop);
+			const cValue = this.cardValue(order, card);
 			if (cValue >= CardValue.Important) {
 				// Should keep this player busy or protect their card.
 				// For now, just protect the card.

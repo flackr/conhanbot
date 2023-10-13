@@ -31,6 +31,9 @@ export function setState(state: {
 			const order = ai.state.deck[ai.state.deck.length - 1];
 			ai.drawCard(i, order, suit, rank);
 			ai.state.ai.inferred[order].clued = clued;
+			if (clued && suit >= 0 && rank >= 0) {
+				ai.state.clued[suit][rank]++;
+			}
 		}
 	}
 	return ai;
