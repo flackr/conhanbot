@@ -674,6 +674,12 @@ export class AI {
 	}
 
 	action(player: number): ReversibleAction {
+		// TODO: The clue giving should probably be reworked to first determine
+		// what the player is likely to do on their turn.
+		// i.e. if they have a play - no protects are necessary.
+		// Similarly, if they are about to misplay a card based on an earlier bad touch,
+		// a clue should probably be given.
+
 		// Check for protects.
 		const hand = this.state.hands[player];
 		for (let offset = 1; offset < this.state.hands.length; ++offset) {
@@ -686,10 +692,13 @@ export class AI {
 			if (cValue >= CardValue.Important) {
 				// Should keep this player busy or protect their card.
 				// For now, just protect the card.
-				// TODO: Determine whether rank or color is better
+				// TODO: Determine whether rank or color is better.
+				// TODO: Don't save 2 if it leads to critical card loss.
+				// TODO: Determine if a play can be given to implicitly save.
 				return new ClueAction(this, player, index, -1, card.rank);
 			}
 		}
+		// TODO: Check for good play clues.
 		// Check for plays.
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
