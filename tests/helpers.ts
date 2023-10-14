@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import { AI, PlayerActionType } from "../src/ai";
 
 export function setState(state: {
@@ -98,23 +99,10 @@ export function cards(ai: AI, player: string, slot: number): string[] {
 export function action(ai: AI, player: string): string {
 	const playerIndex = ai.config.playerNames.indexOf(player);
 	const action = ai.action(playerIndex);
-	const command = action.command();
-	if (!command) {
-		return "No command";
-	}
-	if (command.type == PlayerActionType.Play) {
-		return `Play #${ai.state.hands[playerIndex].indexOf(command.target) + 1}`;
-	}
-	if (command.type == PlayerActionType.Discard) {
-		return `Discard #${
-			ai.state.hands[playerIndex].indexOf(command.target) + 1
-		}`;
-	}
-	const playerName = ai.config.playerNames[command.target];
-	if (command.type == PlayerActionType.ClueSuit) {
-		return `Clue ${playerName} ${ai.state.suits[command.value]}`;
-	} else if (command.type == PlayerActionType.ClueRank) {
-		return `Clue ${playerName} ${command.value}`;
-	}
-	return "Error";
+	return ai.actionString(playerIndex, action);
+}
+
+export function debugAction(ai: AI, player: string) {
+	const playerIndex = ai.config.playerNames.indexOf(player);
+	return ai.debug(playerIndex);
 }

@@ -55,6 +55,19 @@ type GameState = {
 	clues: number;
 	faults: number;
 	turn: number;
+	score: number;
+	lostCards: number;
+};
+
+type Outcome = { stats: ClueStats; action?: ReversibleAction; next?: Outcome };
+type ClueStats = {
+	score: number;
+	clues: number;
+	faults: number;
+	lostCards: number;
+	badTouch: number;
+	reachable: number;
+	eventual: number;
 };
 
 type Pile = number[];
@@ -114,74 +127,109 @@ export type PlayerClueAction = {
 	value: SuitIndex | Rank;
 };
 
+function isKnown(card: CardInfo) {
+	return card.rank >= 0 && card.suitIndex >= 0;
+}
+
 class ReversibleAction {
 	ai: AI;
+	next: ReversibleAction | undefined;
+	player: number;
 
-	constructor(ai: AI) {
+	constructor(ai: AI, player: number) {
 		this.ai = ai;
+		this.player = player;
 	}
 
 	count() {
 		return 1;
 	}
-	play(index: number) {}
-	undo(index: number) {}
+	play(_: number) {}
+	undo(_: number) {}
 	command(): PlayerAction | null {
 		return null;
 	}
 }
 
 class MoveCardAction extends ReversibleAction {
-	source: number[];
+	source: number;
 	index: number;
 	order: number;
 
-	constructor(ai: AI, source: number[], index: number) {
-		super(ai);
+	constructor(ai: AI, player: number, source: number, index: number) {
+		super(ai, player);
 		this.source = source;
 		this.index = index;
-		this.order = source[index];
+		this.order =
+			source == -1 ? ai.state.deck[index] : ai.state.hands[player][index];
 	}
 
-	play(index: number) {
-		this.source.splice(this.index, 1);
+	play(_: number) {
+		if (this.source == -1) {
+			this.ai.state.deck.splice(this.index, 1);
+		} else {
+			this.ai.state.hands[this.source].splice(this.index, 1);
+		}
 	}
 
-	undo(index: number) {
-		this.source.splice(this.index, 0, this.order);
+	undo(_: number) {
+		if (this.source == -1) {
+			this.ai.state.deck.splice(this.index, 0, this.order);
+		} else {
+			this.ai.state.hands[this.source].splice(this.index, 0, this.order);
+		}
 	}
 }
 
 class PlayIndexAction extends MoveCardAction {
-	constructor(ai: AI, source: number[], index: number) {
-		super(ai, source, index);
+	constructor(ai: AI, player: number, index: number) {
+		super(ai, player, player, index);
+		if (this.ai.state.deck.length > 0) {
+			this.next = new PickupCardAction(ai, player);
+		}
 	}
 
-	// Play should consider every possible outcome.
+	// Play should consider every possible outcome for unknown cards.
 	count() {
+		const card = this.ai.state.cards[this.order];
+		if (isKnown(card)) return 1;
 		return this.ai.state.ai.inferred[this.order].possible.length;
 	}
 
 	play(index: number) {
 		super.play(index);
-		let card = this.ai.state.ai.inferred[this.order].possible[index];
+		const revealed = this.ai.state.cards[this.order];
+		let card = isKnown(revealed)
+			? revealed
+			: this.ai.state.ai.inferred[this.order].possible[index];
 		if (this.ai.playable(card)) {
 			this.ai.state.piles[card.suitIndex].push(this.order);
+			this.ai.state.score++;
 		} else {
 			this.ai.state.discard.push(this.order);
 			this.ai.state.faults++;
+			if (--this.ai.state.remain[card.suitIndex][card.rank] == 0) {
+				this.ai.state.lostCards++;
+			}
 		}
 	}
 
 	undo(index: number) {
 		super.undo(index);
-		let card = this.ai.state.ai.inferred[this.order].possible[index];
+		const revealed = this.ai.state.cards[this.order];
+		let card = isKnown(revealed)
+			? revealed
+			: this.ai.state.ai.inferred[this.order].possible[index];
 		let pile = this.ai.state.piles[card.suitIndex];
 		if (pile.length > 0 && pile[pile.length - 1] == this.order) {
 			pile.pop();
+			this.ai.state.score--;
 		} else {
 			this.ai.state.discard.pop();
 			this.ai.state.faults--;
+			if (++this.ai.state.remain[card.suitIndex][card.rank] == 0) {
+				this.ai.state.lostCards--;
+			}
 		}
 	}
 
@@ -195,8 +243,11 @@ class PlayIndexAction extends MoveCardAction {
 }
 
 class DiscardIndexAction extends MoveCardAction {
-	constructor(ai: AI, source: number[], index: number) {
-		super(ai, source, index);
+	constructor(ai: AI, player: number, index: number) {
+		super(ai, player, player, index);
+		if (this.ai.state.deck.length > 0) {
+			this.next = new PickupCardAction(ai, player);
+		}
 	}
 
 	play(index: number) {
@@ -206,7 +257,9 @@ class DiscardIndexAction extends MoveCardAction {
 
 		const card = this.ai.assumedCard(this.order);
 		if (card.rank >= 0 && card.suitIndex >= 0) {
-			this.ai.state.remain[card.suitIndex][card.rank]--;
+			if (--this.ai.state.remain[card.suitIndex][card.rank] == 0) {
+				this.ai.state.lostCards++;
+			}
 		}
 
 		// TODO: A discard when the player has a known play should modify clue state.
@@ -219,7 +272,9 @@ class DiscardIndexAction extends MoveCardAction {
 
 		const card = this.ai.assumedCard(this.order);
 		if (card.rank >= 0 && card.suitIndex >= 0) {
-			this.ai.state.remain[card.suitIndex][card.rank]++;
+			if (this.ai.state.remain[card.suitIndex][card.rank]++ == 0) {
+				this.ai.state.lostCards--;
+			}
 		}
 	}
 
@@ -233,11 +288,8 @@ class DiscardIndexAction extends MoveCardAction {
 }
 
 class PickupCardAction extends MoveCardAction {
-	player: number;
-
 	constructor(ai: AI, player: number) {
-		super(ai, ai.state.deck, 0);
-		this.player = player;
+		super(ai, player, -1, 0);
 	}
 
 	play(index: number) {
@@ -252,8 +304,7 @@ class PickupCardAction extends MoveCardAction {
 }
 
 class ClueAction extends ReversibleAction {
-	from: number;
-	player: number;
+	to: number;
 	clueSuit: number;
 	clueRank: number;
 	prevInfo: ExtraCardInfo[];
@@ -261,32 +312,30 @@ class ClueAction extends ReversibleAction {
 	constructor(
 		ai: AI,
 		from: number,
-		player: number,
+		to: number,
 		clueSuit: number,
 		clueRank: number,
 	) {
-		super(ai);
-		this.from = from;
-		this.player = player;
+		super(ai, from);
+		this.to = to;
 		this.clueSuit = clueSuit;
 		this.clueRank = clueRank;
-		const hand = this.ai.state.hands[this.player];
+		const hand = this.ai.state.hands[this.to];
 		this.prevInfo = [];
 		// Save previous knowledge about cards.
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
-			const card = this.ai.state.cards[order];
 			this.prevInfo.push({ ...this.ai.state.ai.inferred[order] });
 		}
 	}
 
-	play(index: number) {
-		const hand = this.ai.state.hands[this.player];
+	play(_: number) {
+		const hand = this.ai.state.hands[this.to];
 		// Update knowledge about cards.
 		let newlyClued = [];
 		let touched = [];
-		let chop = this.ai.chop(this.player);
-		this.ai.modifyCluedFor(this.from, -1);
+		let chop = this.ai.chop(this.to);
+		this.ai.modifyCluedFor(this.player, -1);
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
 			let card = this.ai.state.cards[order];
@@ -300,8 +349,7 @@ class ClueAction extends ReversibleAction {
 						? (info: CardInfo) =>
 								info.rank == this.clueRank &&
 								(prevKnown ||
-									this.ai.cardValue(order, info, CardValue.Eventual) >=
-										CardValue.Eventual)
+									this.ai.cardValue(order, info, true) >= CardValue.Eventual)
 						: (info: CardInfo) => info.rank != this.clueRank;
 				this.ai.state.ai.inferred[order].possible =
 					this.ai.state.ai.inferred[order].possible.filter(filterFn);
@@ -312,8 +360,7 @@ class ClueAction extends ReversibleAction {
 						? (info: CardInfo) =>
 								info.suitIndex == this.clueSuit &&
 								(prevKnown ||
-									this.ai.cardValue(order, info, CardValue.Eventual) >=
-										CardValue.Eventual)
+									this.ai.cardValue(order, info, true) >= CardValue.Eventual)
 						: (info: CardInfo) => info.suitIndex != this.clueSuit;
 				this.ai.state.ai.inferred[order].possible =
 					this.ai.state.ai.inferred[order].possible.filter(filterFn);
@@ -391,12 +438,12 @@ class ClueAction extends ReversibleAction {
 					});
 			}
 		}
-		this.ai.modifyCluedFor(this.from, 1);
+		this.ai.modifyCluedFor(this.player, 1);
 	}
 
-	undo(index: number) {
+	undo(_: number) {
 		// Restore previous knowledge about cards.
-		const hand = this.ai.state.hands[this.player];
+		const hand = this.ai.state.hands[this.to];
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
 			const card = this.ai.assumedCard(order);
@@ -417,14 +464,14 @@ class ClueAction extends ReversibleAction {
 			return {
 				tableID: this.ai.config.tableID,
 				type: PlayerActionType.ClueRank,
-				target: this.player,
+				target: this.to,
 				value: this.clueRank,
 			};
 		}
 		return {
 			tableID: this.ai.config.tableID,
 			type: PlayerActionType.ClueSuit,
-			target: this.player,
+			target: this.to,
 			value: this.clueSuit,
 		};
 	}
@@ -462,16 +509,17 @@ export class AI {
 			clues: 8,
 			faults: 0,
 			turn: 0,
+			score: 0,
+			lostCards: 0,
 			remain: [],
 			clued: [],
 			ai: {
 				inferred: [],
 			},
 		};
-		let piles = 5;
 		this.state.suits = ["R", "Y", "G", "B", "P"];
 		if (this.config.variant != "No Variant") {
-			throw `Unrecognized variant: ${variant}`;
+			throw `Unrecognized variant: ${this.config.variant}`;
 			return;
 		}
 		let cards = 0;
@@ -528,7 +576,7 @@ export class AI {
 			throw `Requested card #${order} not in deck.`;
 			return;
 		}
-		new DiscardIndexAction(this, this.state.deck, index).play(0);
+		new DiscardIndexAction(this, -1, index).play(0);
 	}
 
 	drawCard(player: number, order: number, suit: number, rank: number) {
@@ -576,11 +624,7 @@ export class AI {
 	/**
 	 * Returns the value of the given card:
 	 */
-	cardValue(
-		order: number,
-		card: CardInfo,
-		minValue: CardValue = CardValue.MaxValue,
-	): CardValue {
+	cardValue(order: number, card: CardInfo, quick: boolean = false): CardValue {
 		// We can't save cards we don't know about.
 		if (card.rank == -1 || card.suitIndex == -1) {
 			return CardValue.Unknown;
@@ -612,12 +656,7 @@ export class AI {
 			return CardValue.Duplicate;
 		}
 
-		// At this point, we're guaranteed this should eventually be a useful card.
-		// If we only card to know that, we can skip some of the more expensive checks.
-		if (minValue <= CardValue.Eventual) {
-			return CardValue.Eventual;
-		}
-		if (card.rank == 2) {
+		if (!quick && card.rank == 2) {
 			// Check if any other instances of this card are visible.
 			let otherCard = -1;
 			for (let i = 0; i < this.state.hands.length; ++i) {
@@ -674,11 +713,196 @@ export class AI {
 	}
 
 	action(player: number): ReversibleAction {
-		// TODO: The clue giving should probably be reworked to first determine
-		// what the player is likely to do on their turn.
-		// i.e. if they have a play - no protects are necessary.
-		// Similarly, if they are about to misplay a card based on an earlier bad touch,
-		// a clue should probably be given.
+		let result = this.bestOutcome(player, this.state.hands.length);
+
+		if (!result.action) {
+			throw "Uhoh, no action!";
+		}
+		return result.action;
+	}
+
+	// Debug the best action.
+	debug(player: number): string {
+		let result = this.bestOutcome(player, this.state.hands.length);
+		let rev: ReversibleAction[] = [];
+		let cur: Outcome | undefined = result;
+		let str = `Computed best actions:`;
+		while (cur && cur.action) {
+			rev.push(cur.action);
+			str += `\n- ${
+				this.config.playerNames[cur.action.player]
+			}: ${this.actionString(cur.action.player, cur.action)}`;
+			cur.action.play(0);
+			cur.action.next?.play(0);
+			cur = cur.next;
+		}
+		str += `\n${this.toString()}`;
+		str += `\nscore = ${this.score(result.stats)} details = ${JSON.stringify(
+			result.stats,
+			undefined,
+			2,
+		)}`;
+		this.clueStats();
+		while (rev.length > 0) {
+			let last = rev.pop();
+			last?.next?.undo(0);
+			last?.undo(0);
+		}
+		return str;
+	}
+
+	toString(): string {
+		return `State:
+  piles: ${this.state.piles
+		.map((pile) =>
+			pile.length == 0 ? "" : this.cardString(pile[pile.length - 1]),
+		)
+		.join(" ")}
+  discard: ${this.state.discard
+		.map((order) => this.cardString(order))
+		.join(" ")}
+	hands:
+${this.state.hands
+	.map((hand) => "    " + hand.map((order) => this.cardString(order)).join(" "))
+	.join("\n")}`;
+		return JSON.stringify(result, undefined, 2);
+	}
+
+	cardString(order: number) {
+		const card = this.state.cards[order];
+		const extra = this.state.ai.inferred[order];
+		return `${card.suitIndex == -1 ? "?" : this.state.suits[card.suitIndex]}${
+			card.rank == -1 ? "?" : card.rank
+		}${extra.clued ? "*" : ""}`;
+	}
+
+	actionString(player: number, action: ReversibleAction) {
+		const command = action.command();
+		if (!command) {
+			return "No command";
+		}
+		if (command.type == PlayerActionType.Play) {
+			return `Play #${this.state.hands[player].indexOf(command.target) + 1}`;
+		}
+		if (command.type == PlayerActionType.Discard) {
+			return `Discard #${this.state.hands[player].indexOf(command.target) + 1}`;
+		}
+		const playerName = this.config.playerNames[command.target];
+		if (command.type == PlayerActionType.ClueSuit) {
+			return `Clue ${playerName} ${this.state.suits[command.value]}`;
+		} else if (command.type == PlayerActionType.ClueRank) {
+			return `Clue ${playerName} ${command.value}`;
+		}
+		return "Error";
+	}
+
+	score(stats: ClueStats): number {
+		return (
+			10 * stats.score -
+			30 * stats.lostCards -
+			50 * stats.faults +
+			2 * stats.clues -
+			15 * stats.badTouch +
+			5 * stats.reachable +
+			3 * stats.eventual
+		);
+	}
+
+	clueStats(): ClueStats {
+		let result: ClueStats = {
+			score: this.state.score,
+			lostCards: this.state.lostCards,
+			faults: this.state.faults,
+			clues: this.state.clues,
+			badTouch: 0,
+			reachable: 0,
+			eventual: 0,
+		};
+		let maxRank: number[] = [];
+		for (let suit = 0; suit < this.state.suits.length; ++suit) {
+			let rank = this.state.piles[suit].length + 1;
+			while (this.state.clued[suit][rank]) {
+				++rank;
+			}
+			maxRank.push(rank);
+		}
+
+		let seen: number[][] = this.state.suits.map((_) => []);
+		for (let i = 0; i < this.state.hands.length; ++i) {
+			for (let j = 0; j < this.state.hands[i].length; ++j) {
+				const order = this.state.hands[i][j];
+				const card = this.assumedCard(order);
+				if (card.rank == -1 || card.suitIndex == -1) continue;
+				const extra = this.state.ai.inferred[order];
+				if (!extra.clued && !extra.play) continue;
+
+				// For known cards, count how many will result in misplays.
+				seen[card.suitIndex][card.rank] =
+					(seen[card.suitIndex][card.rank] || 0) + 1;
+				if (seen[card.suitIndex][card.rank] > 1) {
+					result.badTouch++;
+					continue;
+				}
+
+				// For clued cards, are they reachable with current clued cards?
+				if (card.rank > maxRank[card.suitIndex]) {
+					result.eventual++;
+				} else if (card.rank > this.state.piles[card.suitIndex].length) {
+					result.reachable++;
+				} else if (extra.possible.length > 0) {
+					// If this card is never playable, but the player thinks it may be,
+					// it is a bad touch.
+					result.badTouch++;
+				}
+			}
+		}
+		return result;
+	}
+
+	bestOutcome(player: number, depth: number): Outcome {
+		if (depth == 0) {
+			return { stats: this.clueStats() };
+		}
+		const consider = this.actions(player);
+		let best: Outcome = { stats: this.clueStats() };
+		for (let cur of consider) {
+			const next = cur.next;
+			let worst: Outcome = { stats: best.stats };
+			// Find the worst result of the possible outcomes of this action.
+			const count = cur.count();
+			for (let i = 0; i < count; ++i) {
+				cur.play(i);
+				next?.play(0);
+				let result = this.bestOutcome(
+					(player + 1) % this.state.hands.length,
+					depth - 1,
+				);
+				if (
+					worst.action === undefined ||
+					this.score(result.stats) < this.score(worst.stats)
+				) {
+					worst = { stats: result.stats, action: cur, next: result };
+				}
+				next?.undo(0);
+				cur.undo(i);
+			}
+
+			// If the worst outcome is better than the current best, store it.
+			if (
+				best.action === undefined ||
+				this.score(worst.stats) > this.score(best.stats)
+			) {
+				best = worst;
+			}
+		}
+		if (!best.action) {
+			throw "No action";
+		}
+		return best;
+	}
+
+	actions(player: number): ReversibleAction[] {
+		let result: ReversibleAction[] = [];
 
 		// Check for protects.
 		const hand = this.state.hands[player];
@@ -690,15 +914,67 @@ export class AI {
 			if (chop == -1) continue;
 			const cValue = this.cardValue(order, card);
 			if (cValue >= CardValue.Important) {
-				// Should keep this player busy or protect their card.
-				// For now, just protect the card.
-				// TODO: Determine whether rank or color is better.
-				// TODO: Don't save 2 if it leads to critical card loss.
-				// TODO: Determine if a play can be given to implicitly save.
-				return new ClueAction(this, player, index, -1, card.rank);
+				// We've discovered an important card, consider protect actions.
+				result.push(new ClueAction(this, player, index, -1, card.rank));
+				if (cValue > CardValue.Critical_5) {
+					result.push(new ClueAction(this, player, index, card.suitIndex, -1));
+				}
 			}
 		}
-		// TODO: Check for good play clues.
+
+		if (this.state.clues > 0) {
+			// TODO: Check for finesses / bluffs / layered finesses etc.
+			// Search for direct play clues.
+			for (let i = 0; i < this.state.hands.length; ++i) {
+				if (i == player) {
+					continue;
+				}
+				let firstOfRank: (number | undefined)[] = [];
+				let firstOfSuit: (number | undefined)[] = [];
+				const chop = this.chop(i);
+				if (chop >= 0) {
+					const order = this.state.hands[i][chop];
+					const chopCard = this.state.cards[order];
+					if (chopCard.rank >= 0) {
+						firstOfRank[chopCard.rank] = order;
+					}
+					if (chopCard.suitIndex >= 0) {
+						firstOfSuit[chopCard.suitIndex] = order;
+					}
+				}
+				for (let j = 0; j < this.state.hands[i].length; ++j) {
+					const order = this.state.hands[i][j];
+					const card = this.state.cards[order];
+					if (card.rank == -1 || card.suitIndex == -1) continue;
+					const extra = this.state.ai.inferred[order];
+					// For now, only consider unclued cards.
+					if (extra.clued) {
+						continue;
+					}
+					if (firstOfRank[card.rank] === undefined) {
+						firstOfRank[card.rank] = order;
+					}
+					if (firstOfSuit[card.suitIndex] === undefined) {
+						firstOfSuit[card.suitIndex] = order;
+					}
+					if (extra.play) {
+						continue;
+					}
+					if (
+						this.playable(card) &&
+						!this.state.clued[card.suitIndex][card.rank]
+					) {
+						if (firstOfRank[card.rank] == order) {
+							result.push(new ClueAction(this, player, i, -1, card.rank));
+						}
+						if (firstOfSuit[card.suitIndex] == order) {
+							result.push(new ClueAction(this, player, i, card.suitIndex, -1));
+						}
+					}
+				}
+			}
+		}
+
 		// Check for plays.
 		for (let i = 0; i < hand.length; ++i) {
 			const order = hand[i];
@@ -710,11 +986,11 @@ export class AI {
 				}
 			}
 			if (allPlayable) {
-				return new PlayIndexAction(this, hand, i);
+				result.push(new PlayIndexAction(this, player, i));
 			}
 		}
-		// Otherwise discard.
-		return new DiscardIndexAction(this, hand, this.chop(player));
+		result.push(new DiscardIndexAction(this, player, this.chop(player)));
+		return result;
 	}
 
 	playable(card: CardInfo) {

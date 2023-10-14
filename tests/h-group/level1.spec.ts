@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { setState, clue, draw, cards, action } from "../helpers";
+import {
+	setState,
+	clue,
+	draw,
+	cards,
+	action,
+	expectAction,
+	debugAction,
+} from "../helpers";
 
 describe("hgroup level 1", () => {
 	describe("1 - Play Clues", () => {
@@ -227,6 +235,7 @@ describe("hgroup level 1", () => {
 			});
 
 			// Not allowed to save either 2 because the matching 2 is visible.
+			//expectAction(ai, "Alice", "Discard #3");
 			expect(action(ai, "Alice")).toEqual("Discard #3");
 		});
 
