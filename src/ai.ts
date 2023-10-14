@@ -50,6 +50,11 @@ type GameState = {
 	remain: number[][];
 	// The number of clued cards of each suit/rank.
 	clued: number[][];
+	// The number of cards seen of each suit/rank.
+	visible: number[][];
+	// The number of cards by suit / rank.
+	totalCards: number[][];
+
 	piles: Pile[];
 	ai: AIInfo;
 	clues: number;
@@ -288,18 +293,72 @@ class DiscardIndexAction extends MoveCardAction {
 }
 
 class PickupCardAction extends MoveCardAction {
-	constructor(ai: AI, player: number) {
-		super(ai, player, -1, 0);
+	possible: { [id: number]: CardInfo[] };
+
+	constructor(ai: AI, player: number, index: number = 0) {
+		super(ai, player, -1, index);
+		this.possible = {};
+		const card = this.ai.state.cards[this.order];
+		this.possible[this.order] = this.ai.state.ai.inferred[this.order].possible;
+		if (isKnown(card)) {
+			for (let i = 0; i < this.ai.state.hands.length; ++i) {
+				if (i == player) continue;
+				for (let j = 0; j < this.ai.state.hands[i].length; ++j) {
+					const order = this.ai.state.hands[i][j];
+					const possible = this.ai.state.ai.inferred[order].possible;
+					if (
+						possible.find(
+							(info) =>
+								info.rank == card.rank && info.suitIndex == card.suitIndex,
+						) === undefined
+					)
+						continue;
+					this.possible[order] = possible;
+				}
+			}
+		}
 	}
 
 	play(index: number) {
 		super.play(index);
 		this.ai.state.hands[this.player].splice(0, 0, this.order);
+		const card = this.ai.state.cards[this.order];
+		if (isKnown(card)) {
+			if (
+				++this.ai.state.visible[card.suitIndex][card.rank] ==
+				this.ai.state.totalCards[card.suitIndex][card.rank]
+			) {
+				// Every player that can see it notes that they can no longer have this card.
+				for (let order in this.possible) {
+					this.ai.state.ai.inferred[order].possible = this.ai.state.ai.inferred[
+						order
+					].possible.filter(
+						(info) =>
+							info.rank != card.rank || info.suitIndex != card.suitIndex,
+					);
+				}
+			}
+		}
+		const extra = this.ai.state.ai.inferred[this.order];
+		this.ai.modifyCluedFor(this.player, -1);
+		extra.possible = this.possible[this.order].filter(
+			(info) =>
+				this.ai.state.visible[info.suitIndex][info.rank] <
+				this.ai.state.totalCards[info.suitIndex][info.rank],
+		);
+		this.ai.modifyCluedFor(this.player, 1);
 	}
 
 	undo(index: number) {
 		super.undo(index);
 		this.ai.state.hands[this.player].splice(0, 1);
+		const card = this.ai.state.cards[this.order];
+		if (isKnown(card)) {
+			this.ai.state.visible[card.suitIndex][card.rank]--;
+			for (let order in this.possible) {
+				this.ai.state.ai.inferred[order].possible = this.possible[order];
+			}
+		}
 	}
 }
 
@@ -349,7 +408,7 @@ class ClueAction extends ReversibleAction {
 						? (info: CardInfo) =>
 								info.rank == this.clueRank &&
 								(prevKnown ||
-									this.ai.cardValue(order, info, true) >= CardValue.Eventual)
+									this.ai.cardValue(order, info) >= CardValue.Eventual)
 						: (info: CardInfo) => info.rank != this.clueRank;
 				this.ai.state.ai.inferred[order].possible =
 					this.ai.state.ai.inferred[order].possible.filter(filterFn);
@@ -360,7 +419,7 @@ class ClueAction extends ReversibleAction {
 						? (info: CardInfo) =>
 								info.suitIndex == this.clueSuit &&
 								(prevKnown ||
-									this.ai.cardValue(order, info, true) >= CardValue.Eventual)
+									this.ai.cardValue(order, info) >= CardValue.Eventual)
 						: (info: CardInfo) => info.suitIndex != this.clueSuit;
 				this.ai.state.ai.inferred[order].possible =
 					this.ai.state.ai.inferred[order].possible.filter(filterFn);
@@ -512,6 +571,8 @@ export class AI {
 			score: 0,
 			lostCards: 0,
 			remain: [],
+			visible: [],
+			totalCards: [],
 			clued: [],
 			ai: {
 				inferred: [],
@@ -527,11 +588,15 @@ export class AI {
 		for (let suit = 0; suit < this.state.suits.length; ++suit) {
 			const numOfRank = [0, 3, 2, 2, 2, 1];
 			this.state.remain.push([]);
+			this.state.visible.push([]);
 			this.state.clued.push([]);
 			this.state.piles.push([]);
+			this.state.totalCards.push([]);
 			for (let rank = 1; rank <= 5; ++rank) {
 				this.state.remain[suit][rank] = numOfRank[rank];
+				this.state.totalCards[suit][rank] = numOfRank[rank];
 				this.state.clued[suit][rank] = 0;
+				this.state.visible[suit][rank] = 0;
 				cards += this.state.remain[suit][rank];
 				allPossible.push({ rank, suitIndex: suit });
 			}
@@ -577,6 +642,10 @@ export class AI {
 			return;
 		}
 		new DiscardIndexAction(this, -1, index).play(0);
+		const card = this.state.cards[order];
+		if (isKnown(card)) {
+			this.state.visible[card.suitIndex][card.rank]++;
+		}
 	}
 
 	drawCard(player: number, order: number, suit: number, rank: number) {
@@ -585,10 +654,9 @@ export class AI {
 			throw `Requested card #${order} not in deck.`;
 			return;
 		}
-		this.state.deck.splice(index, 1);
-		this.state.hands[player].splice(0, 0, order);
 		this.state.cards[order].rank = rank;
 		this.state.cards[order].suitIndex = suit;
+		new PickupCardAction(this, player, index).play(0);
 	}
 
 	giveClue(
@@ -624,7 +692,7 @@ export class AI {
 	/**
 	 * Returns the value of the given card:
 	 */
-	cardValue(order: number, card: CardInfo, quick: boolean = false): CardValue {
+	cardValue(order: number, card: CardInfo): CardValue {
 		// We can't save cards we don't know about.
 		if (card.rank == -1 || card.suitIndex == -1) {
 			return CardValue.Unknown;
@@ -656,27 +724,8 @@ export class AI {
 			return CardValue.Duplicate;
 		}
 
-		if (!quick && card.rank == 2) {
-			// Check if any other instances of this card are visible.
-			let otherCard = -1;
-			for (let i = 0; i < this.state.hands.length; ++i) {
-				let oorder = this.state.hands[i].find((oorder) => {
-					const other = this.state.cards[oorder];
-					return (
-						oorder != order &&
-						other.rank == card.rank &&
-						other.suitIndex == card.suitIndex
-					);
-				});
-				if (oorder !== undefined) {
-					// TODO: Find clued other card if it exists.
-					otherCard = oorder;
-					break;
-				}
-			}
-			if (otherCard == -1) {
-				return CardValue.TwoSave;
-			}
+		if (card.rank == 2 && this.state.visible[card.suitIndex][2] <= 1) {
+			return CardValue.TwoSave;
 		}
 
 		if (
@@ -701,12 +750,8 @@ export class AI {
 			const order = giver[i];
 			const card = this.state.cards[order];
 			const inferred = this.state.ai.inferred[order];
-			if (
-				inferred.clued &&
-				card.rank >= 0 &&
-				card.suitIndex >= 0 &&
-				inferred.possible.length != 1
-			) {
+			if (inferred.clued && isKnown(card) && inferred.possible.length != 1) {
+				this.state.visible[card.suitIndex][card.rank] += direction;
 				this.state.clued[card.suitIndex][card.rank] += direction;
 			}
 		}

@@ -283,8 +283,39 @@ describe("hgroup level 1", () => {
 			});
 			expect(action(ai, "Alice")).toEqual("Clue Cathy 5");
 			clue(ai, "Alice", "Cathy", 5, [5]);
-			// TODO: Need to determine that purple is a better save clue than the rank clue.
 			expect(action(ai, "Bob")).toEqual("Clue Cathy P");
+		});
+
+		// https://hanabi.github.io/docs/beginner/critical-save-question-3
+		it("The Critical Save (Question 3)", () => {
+			let ai = setState({
+				piles: ["R2", "G1", "B4", "P3"],
+				discard: ["Y3", "Y4"],
+				hands: [
+					["??", "??", "??", "??", "??"],
+					["??", "??", "??", "??", "?3*"],
+					["G3", "G4", "Y3", "G1", "P1"],
+				],
+			});
+			// Alice clues yellow to Bob, touching a card on slot 4.
+			clue(ai, "Alice", "Bob", "Y", [4]);
+			expect(cards(ai, "Bob", 4)).toEqual(["Y1", "Y4"].sort());
+		});
+
+		// https://hanabi.github.io/docs/beginner/critical-save-question-4
+		it("The Critical Save (Question 4)", () => {
+			let ai = setState({
+				piles: ["Y2", "G2", "B2", "P2"],
+				discard: ["R2"],
+				hands: [
+					["??", "??", "??", "??", "??"],
+					["??", "??", "??", "??", "??"],
+					["P1", "G1", "B2", "B1", "G2"],
+				],
+			});
+			// Alice clues red to Bob, touching a card on slot 5.
+			clue(ai, "Alice", "Bob", "R", [5]);
+			expect(cards(ai, "Bob", 5)).toEqual(["R1", "R2"].sort());
 		});
 	});
 });

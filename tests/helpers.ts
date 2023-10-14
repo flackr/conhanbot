@@ -23,6 +23,7 @@ export function setState(state: {
 			}
 			ai.state.cards[order].rank = j;
 			ai.state.cards[order].suitIndex = suit;
+			ai.state.visible[suit][j]++;
 			ai.state.piles[suit].push(order);
 		}
 	}
